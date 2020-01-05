@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,8 +12,11 @@ namespace cliplay
     [Route("authorization-code")]
     public class OAuth2Controller : ControllerBase
     {
-        public OAuth2Controller()
+        private readonly IHttpClientFactory _factory;
+
+        public OAuth2Controller(IHttpClientFactory factory)
         {
+            _factory = factory;
         }
 
         [Route("callback")]
@@ -24,17 +26,17 @@ namespace cliplay
 
             // Check if rsp.State is the same as the request state... but how? expose it as public variable?
 
-            var req = new HttpRequestMessage(HttpMethod.Post, "***REMOVED***/oauth2/default/v1/token");
+            var req = new HttpRequestMessage(HttpMethod.Post, Program.Okta.Metadata.TokenEndpoint);
             req.Content = new FormUrlEncodedContent(new Dictionary<string, string> {
                 ["grant_type"] = "authorization_code",
                 ["code"] = rsp.Code,
                 ["redirect_uri"] = "http://localhost:8080/authorization-code/callback",
-                ["client_id"] = "***REMOVED***",
-                ["client_secret"] = "***REMOVED***"
+                ["client_id"] = Program.Okta.ClientId,
+                ["client_secret"] = Program.Okta.ClientSecret
             });
             req.Headers.Add("Accept", "application/json");
 
-            var client = new HttpClient();
+            var client = _factory.CreateClient("okta");
             var rsp2 = client.SendAsync(req).GetAwaiter().GetResult();
 
             var json = rsp2.Content.ReadAsStringAsync().GetAwaiter().GetResult();
@@ -49,11 +51,11 @@ namespace cliplay
             //Can query the response Active prop to see if the user is still logged in?
             //We can use this to check if the user is still logged in?
             //Also to get the newly authenticated user info back (UserName property)
-            var req2 = new HttpRequestMessage(HttpMethod.Post, "***REMOVED***/oauth2/default/v1/introspect");
+            var req2 = new HttpRequestMessage(HttpMethod.Post, Program.Okta.Metadata.IntrospectionEndpoint);
             req2.Content = new FormUrlEncodedContent(new Dictionary<string, string> {
                 ["token"] = result.AccessToken,
-                ["client_id"] = "***REMOVED***",
-                ["client_secret"] = "***REMOVED***"
+                ["client_id"] = Program.Okta.ClientId,
+                ["client_secret"] = Program.Okta.ClientSecret
             });            
             req2.Headers.Add("Accept", "application/json");
 
@@ -100,5 +102,17 @@ namespace cliplay
     {
         public string Code { get; set; }
         public string State { get; set; }
+    }
+
+    public class OktaMetadata
+    {
+        [JsonPropertyName("authorization_endpoint")]
+        public string AuthorizationEndpoint { get; set; }
+
+        [JsonPropertyName("token_endpoint")]
+        public string TokenEndpoint { get; set; }
+
+        [JsonPropertyName("introspection_endpoint")]
+        public string IntrospectionEndpoint { get; set; }
     }
 }
