@@ -1,9 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.Net.Http;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+
 using Microsoft.AspNetCore.Mvc;
 
 namespace cliplay
@@ -12,107 +9,33 @@ namespace cliplay
     [Route("authorization-code")]
     public class OAuth2Controller : ControllerBase
     {
-        private readonly IHttpClientFactory _factory;
+        private readonly OAuth2Provider _oauth2Provider;
 
-        public OAuth2Controller(IHttpClientFactory factory)
+        public OAuth2Controller(OAuth2Provider oauth2Provider)
         {
-            _factory = factory;
+            _oauth2Provider = oauth2Provider;
         }
 
         [Route("callback")]
-        public ActionResult Callback([FromQuery] OAuth2Response rsp)
+        public async Task<ActionResult> Callback([FromQuery] OAuth2Response response)
         {
-            //Console.WriteLine(JsonSerializer.Serialize(rsp));
+            //Ensure the state we pass we got back in the callback to prevent injection attack
+            if (response.State != Program.OAuth2RequestState) return BadRequest();
 
-            // Check if rsp.State is the same as the request state... but how? expose it as public variable?
+            var accessTokenResponse = await _oauth2Provider.GetOAuth2AccessTokenFor(response.Code);
+            var introspectResponse = await _oauth2Provider.GetOAuth2IntrospectionResultFor(accessTokenResponse.AccessToken);
 
-            var req = new HttpRequestMessage(HttpMethod.Post, Program.Okta.Metadata.TokenEndpoint);
-            req.Content = new FormUrlEncodedContent(new Dictionary<string, string> {
-                ["grant_type"] = "authorization_code",
-                ["code"] = rsp.Code,
-                ["redirect_uri"] = "http://localhost:8080/authorization-code/callback",
-                ["client_id"] = Program.Okta.ClientId,
-                ["client_secret"] = Program.Okta.ClientSecret
-            });
-            req.Headers.Add("Accept", "application/json");
+            Console.WriteLine($"Logged in as {introspectResponse.UserName}.");
 
-            var client = _factory.CreateClient("okta");
-            var rsp2 = client.SendAsync(req).GetAwaiter().GetResult();
+            //TODO: Add code here to cache the token etc. into ~/.cliplay/profile.json
 
-            var json = rsp2.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-            //Console.WriteLine(json);
-
-            var result = JsonSerializer.Deserialize<OAuthAccessTokenResponse>(json);
-            //Console.WriteLine(result.AccessToken);
-            //Console.WriteLine(result.ExpiresIn);
-            //Console.WriteLine(result.TokenType);
-
-            //Can call this endpoint to see if the access token is still active and it will return back the user info?
-            //Can query the response Active prop to see if the user is still logged in?
-            //We can use this to check if the user is still logged in?
-            //Also to get the newly authenticated user info back (UserName property)
-            var req2 = new HttpRequestMessage(HttpMethod.Post, Program.Okta.Metadata.IntrospectionEndpoint);
-            req2.Content = new FormUrlEncodedContent(new Dictionary<string, string> {
-                ["token"] = result.AccessToken,
-                ["client_id"] = Program.Okta.ClientId,
-                ["client_secret"] = Program.Okta.ClientSecret
-            });            
-            req2.Headers.Add("Accept", "application/json");
-
-            var rsp3 = client.SendAsync(req2).GetAwaiter().GetResult();
-            json = rsp3.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-            //Console.WriteLine(json);
-            var result2 = JsonSerializer.Deserialize<OAuthIntrospectResponse>(json);
-            Console.WriteLine($"Logged in as {result2.UserName}.");
-            //Console.WriteLine(result2.Active);
-
-            Task.Run(async () => {
-                await Program.MiniHost.StopAsync();
-            });
+            //Hack to stop the Web Server Host fire and forget style
+            //since we don't need it anymore after handling the callback.
+            _ = Task.Run(async () => {
+                await Program.OAuth2CallbackHost.StopAsync();
+            }).ConfigureAwait(false);
 
             return Ok("You can close this browser now...");
         }
-    }
-
-    public class OAuthAccessTokenResponse
-    {
-        [JsonPropertyName("token_type")]
-        public string TokenType { get; set; }
-
-        [JsonPropertyName("expires_in")]
-        public long ExpiresIn { get; set; }
-
-        [JsonPropertyName("access_token")]
-        public string AccessToken { get; set; }
-    }
-
-    public class OAuthIntrospectResponse
-    {
-        [JsonPropertyName("active")]
-        public bool Active { get; set; }
-
-        [JsonPropertyName("username")]
-        public string UserName { get; set; }
-
-        [JsonPropertyName("exp")]
-        public long Exp { get; set; }
-    }
-
-    public class OAuth2Response
-    {
-        public string Code { get; set; }
-        public string State { get; set; }
-    }
-
-    public class OktaMetadata
-    {
-        [JsonPropertyName("authorization_endpoint")]
-        public string AuthorizationEndpoint { get; set; }
-
-        [JsonPropertyName("token_endpoint")]
-        public string TokenEndpoint { get; set; }
-
-        [JsonPropertyName("introspection_endpoint")]
-        public string IntrospectionEndpoint { get; set; }
     }
 }
